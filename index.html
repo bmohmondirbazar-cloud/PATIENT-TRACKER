@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Clinical Registry Terminal & Data Importer (Supabase Powered)</title>
+    
+    <!-- Tailwind CSS Engine for modular dashboard styling -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    
+    <!-- React & ReactDOM Core Stable Production Frameworks -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel Compiler for client-side runtime JSX parsing -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- SheetJS Library for advanced spreadsheet reading & Excel compilation -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- Supabase Core CDN Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- Native Printing Blueprint Styling for clean document handling -->
+    <style>
+        @media print {
+            html, body {
+                height: auto !important;
+                background: white !important;
+                color: black !important;
+            }
+            body * {
+                visibility: hidden;
+            }
+            #print-document-structure, #print-document-structure * {
+                visibility: visible;
+            }
+            #print-document-structure {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                padding: 10px;
+            }
+            tr {
+                page-break-inside: avoid !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased">
+
+    <!-- Target Mount Anchor node for React application runtime injection -->
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // ==========================================
+        //  SUPABASE CONNECTION CONFIGURATION 
+        // ==========================================
+        const SUPABASE_URL = "YOUR_SUPABASE_PROJECT_URL"; 
+        const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+        
+        const supabase = (SUPABASE_URL !== "YOUR_SUPABASE_PROJECT_URL") 
+            ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
+            : null;
+
+        function PatientRegistry() {
+          // --- AUTHENTICATION STATE GATEKEEPING ---
+          const [isAuthenticated, setIsAuthenticated] = useState(false);
+          const [loginId, setLoginId] = useState('');
+          const [password, setPassword] = useState('');
+          const [authError, setAuthError] = useState('');
+
+          // --- FORM INPUT ROW STATES ---
+          const [formData, setFormData] = useState({
+            labId: '', name: '', guardianName: '', age: '', gender: 'Male', mobile: '', aadhaar: '', address: '',
+            date: new Date().toISOString().split('T')[0] 
+          });
+
+          // --- EDIT MODE TRACKING STATE ---
+          const [editingRecordId, setEditingRecordId] = useState(null);
+
+          // --- DYNAMIC TEST CHECKLIST DICTIONARY STATES (FALLBACK BASE SEED) ---
+          const [testOptions, setTestOptions] = useState([
+            'Malaria Pv/Pf', 'Dengue NS1/IgM', 'Typhoid (Widal)', 'Chikungunya', 'COVID-19 Ag', 'Scrub Typhus'
+          ]);
+          const [selectedTests, setSelectedTests] = useState({});
+          const [newTestInput, setNewTestInput] = useState('');
+
+          const [records, setRecords] = useState([]);
+          const [error, setError] = useState('');
+          const [successMsg, setSuccessMsg] = useState('');
+          
+          // --- SCOPE, SEARCH AND CROSS-SECTION FILTER STATES ---
+          const [filterMonth, setFilterMonth] = useState('All'); 
+          const [filterDate, setFilterDate] = useState('');
+          const [activeDiseaseFilter, setActiveDiseaseFilter] = useState('All');
+          const [searchQuery, setSearchQuery] = useState('');
+
+          // --- MULTI-ROW RENDERING SELECTORS ---
+          const [selectedRowIds, setSelectedRowIds] = useState([]);
+          const [printItems, setPrintItems] = useState([]);
+
+          // Secure application session synchronizer on initialization layout
+          useEffect(() => {
+            try {
+              const sessionAuth = localStorage.getItem('registry_authenticated_v4');
+              if (sessionAuth === 'true') {
+                setIsAuthenticated(true);
+              }
+
+              // Fetch basic setup parameters
+              fetchSupabaseRecords();
+              fetchGlobalTestOptions();
+            } catch (err) {
+              console.error("Local session initialization failed:", err);
+            }
+          }, []);
+
+          // --- SUPABASE DATA RETRIEVAL PIPELINE ---
+          const fetchSupabaseRecords = async () => {
+            if (!supabase) return;
+            try {
+              const { data, error: sbErr } = await supabase
+                .from('records')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+              if (sbErr) throw sbErr;
+              setRecords(data || []);
+            } catch (err) {
+              setError(`Supabase Read Fault: ${err.message}`);
+            }
+          };
+
+          // --- CLOUD CONFIGURATION INGEST PARSER ---
+          const fetchGlobalTestOptions = async () => {
+            if (!supabase) return;
+            try {
+              const { data, error: sbErr } = await supabase
+                .from('test_options')
+                .select('test_name')
+                .order('created_at', { ascending: true });
+
+              if (sbErr) throw sbErr;
+              if (data && data.length > 0) {
+                setTestOptions(data.map(item => item.test_name));
+              }
+            } catch (err) {
+              console.error("Could not load cloud test options, running fallback layout components:", err);
+            }
+          };
+
+          // --- SYSTEM AUTHENTICATION LOGIC PROCESSORS ---
+          const handleLoginSubmit = (e) => {
+            e.preventDefault();
+            setAuthError('');
+
+            const targetUser = loginId.trim();
+            const targetPass = password.trim();
+
+            if (targetUser === 'admin' && targetPass === 'admin123') {
+              setIsAuthenticated(true);
+              localStorage.setItem('registry_authenticated_v4', 'true');
+              setLoginId('');
+              setPassword('');
+            } else {
+              setAuthError('Invalid operational Login ID or Access Password.');
+            }
+          };
+
+          const handleSystemLogout = () => {
+            if (!confirm("Are you sure you want to log out of the clinical session terminal?")) return;
+            localStorage.removeItem('registry_authenticated_v4');
+            setIsAuthenticated(false);
+            setSuccessMsg('');
+            setError('');
+          };
+
+          // --- CLOUD-SYNCHRONIZED DYNAMIC CHECKLIST ENGINES ---
+          const addNewTestOption = async () => {
+            const cleanName = newTestInput.trim();
+            if (!cleanName) return;
+            if (testOptions.some(t => t.toLowerCase() === cleanName.toLowerCase())) {
+              alert("This diagnostic panel marker lineage line already exists.");
+              return;
+            }
+            if (!supabase) return setError("Supabase execution locked.");
+
+            try {
+              const { error: sbErr } = await supabase
+                .from('test_options')
+                .insert([{ test_name: cleanName }]);
+
+              if (sbErr) throw sbErr;
+              
+              setNewTestInput('');
+              setSuccessMsg(`Global list option "${cleanName}" pushed onto Cloud Node.`);
+              await fetchGlobalTestOptions();
+            } catch(err) {
+              setError(`Failed to save checklist variant row: ${err.message}`);
+            }
+          };
+
+          const deleteTestOption = async (testToDelete) => {
+            if (!confirm(`Are you sure you want to remove "${testToDelete}" globally across all system machines?`)) return;
+            if (!supabase) return;
+
+            try {
+              const { error: sbErr } = await supabase
+                .from('test_options')
+                .delete()
+                .eq('test_name', testToDelete);
+
+              if (sbErr) throw sbErr;
+              
+              const updatedSelected = { ...selectedTests };
+              delete updatedSelected[testToDelete];
+              setSelectedTests(updatedSelected);
+              
+              setSuccessMsg(`Purged profile option marker: ${testToDelete}`);
+              await fetchGlobalTestOptions();
+            } catch(err) {
+              setError(`Cloud configuration mutation fault: ${err.message}`);
+            }
+          };
+
+          // --- FORM COMPLIANCE HANDLERS ---
+          const handleInputChange = (e) => {
+            const { name, value } = e.target;
+            if ((name === 'mobile' || name === 'aadhaar') && !/^\d*$/.test(value)) return;
+            setFormData(prev => ({ ...prev, [name]: value }));
+          };
+
+          const handleCheckboxToggle = (testName) => {
+            setSelectedTests(prev => ({ ...prev, [testName]: !prev[testName] }));
+          };
+
+          // --- INTAKE COMMIT PROCESSING ENGINE ---
+          const handleSubmit = async (e) => {
+            e.preventDefault();
+            setError(''); setSuccessMsg('');
+
+            if (formData.mobile.length !== 10) return setError('Mobile entry parameter must be exactly 10 digits.');
+            if (formData.aadhaar.length > 0 && formData.aadhaar.length !== 12) {
+              return setError('Aadhaar record vector must be exactly 12 digits if provided.');
+            }
+
+            const activePositives = Object.keys(selectedTests).filter(t => selectedTests[t]);
+            if (activePositives.length === 0) return setError('Please flag at least one valid confirmed positive diagnostic lineage marker line.');
+
+            const dateParts = formData.date.split('-');
+            const chosenDate = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
+            
+            const displayDateStr = `${String(dateParts[2]).padStart(2, '0')}/${String(dateParts[1]).padStart(2, '0')}/${dateParts[0]}`;
+            const monthGroupStr = chosenDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+            if (!supabase) return setError("Supabase is unconfigured. Operations locked.");
+
+            try {
+              if (editingRecordId) {
+                const updatedPayload = {
+                  labId: formData.labId,
+                  name: formData.name,
+                  guardianName: formData.guardianName,
+                  age: formData.age,
+                  gender: formData.gender,
+                  mobile: formData.mobile,
+                  aadhaar: formData.aadhaar,
+                  address: formData.address,
+                  tests: activePositives,
+                  rawDate: formData.date,
+                  displayDate: displayDateStr,
+                  monthGroup: monthGroupStr
+                };
+
+                const { error: sbErr } = await supabase
+                  .from('records')
+                  .update(updatedPayload)
+                  .eq('id', editingRecordId);
+
+                if (sbErr) throw sbErr;
+                setSuccessMsg('Patient profile updated safely in Supabase database storage.');
+                setEditingRecordId(null);
+              } else {
+                const newRecord = {
+                  id: 'PAT-' + Date.now().toString().slice(-6),
+                  labId: formData.labId,
+                  name: formData.name,
+                  guardianName: formData.guardianName,
+                  age: formData.age,
+                  gender: formData.gender,
+                  mobile: formData.mobile,
+                  aadhaar: formData.aadhaar,
+                  address: formData.address,
+                  tests: activePositives,
+                  rawDate: formData.date, 
+                  displayDate: displayDateStr,
+                  monthGroup: monthGroupStr
+                };
+
+                const { error: sbErr } = await supabase
+                  .from('records')
+                  .insert([newRecord]);
+
+                if (sbErr) throw sbErr;
+                setSuccessMsg('Patient profile committed safely into active Supabase cloud log queue.');
+              }
+
+              // Refresh UI Layout
+              fetchSupabaseRecords();
+              setFormData({ 
+                labId: '', name: '', guardianName: '', age: '', gender: 'Male', mobile: '', aadhaar: '', address: '',
+                date: new Date().toISOString().split('T')[0]
+              });
+              setSelectedTests({});
+            } catch (err) {
+              setError(`Database Commit Fault: ${err.message}`);
+            }
+          };
+
+          // --- EDIT / DELETE INDIVIDUAL ROW CONTROLS ---
+          const startEditRecord = (record) => {
+            setEditingRecordId(record.id);
+            setFormData({
+              labId: record.labId || '',
+              name: record.name,
+              guardianName: record.guardianName || '',
+              age: record.age,
+              gender: record.gender,
+              mobile: record.mobile,
+              aadhaar: record.aadhaar || '',
+              address: record.address || '',
+              date: record.rawDate || new Date().toISOString().split('T')[0]
+            });
+
+            const testMap = {};
+            record.tests.forEach(t => {
+              testMap[t] = true;
+            });
+            setSelectedTests(testMap);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          };
+
+          const cancelEditMode = () => {
+            setEditingRecordId(null);
+            setFormData({ 
+              labId: '', name: '', guardianName: '', age: '', gender: 'Male', mobile: '', aadhaar: '', address: '',
+              date: new Date().toISOString().split('T')[0]
+            });
+            setSelectedTests({});
+          };
+
+          const deleteRecord = async (id) => {
+            if (!confirm("Are you sure you want to permanently delete this patient record from cloud systems?")) return;
+            if (!supabase) return setError("Supabase is unconfigured.");
+
+            try {
+              const { error: sbErr } = await supabase
+                .from('records')
+                .delete()
+                .eq('id', id);
+
+              if (sbErr) throw sbErr;
+
+              setSelectedRowIds(prev => prev.filter(rid => rid !== id));
+              if (editingRecordId === id) cancelEditMode();
+              setSuccessMsg("Patient diagnostic log node cleanly purged from Cloud Matrix.");
+              fetchSupabaseRecords();
+            } catch (err) {
+              setError(`Purge Error: ${err.message}`);
+            }
+          };
+
+          // --- STRUCTURED DATA CARD DISPATCH ROUTER ---
+          const shareAsDataCard = (record) => {
+            const textLayout = 
+`====================================
+  PATIENT CLINICAL CASE REGISTRY   
+====================================
+Lab ID         : ${record.labId || 'N/A'}
+Case Ref ID    : ${record.id}
+Register Date  : ${record.displayDate}
+Patient Name   : ${record.name}
+Age / Gender   : ${record.age} Yrs / ${record.gender}
+Guardian Name  : ${record.guardianName || 'N/A'}
+Mobile Number  : ${record.mobile}
+Aadhaar Card   : ${record.aadhaar || '—'}
+Address Locality: ${record.address || 'N/A'}
+------------------------------------
+POSITIVE FINDINGS LAB PROFILES:
+${record.tests.map(t => `• [POS] ${t}`).join('\n')}
+------------------------------------
+Core Protocol Registry System Terminal v4
+====================================`;
+
+            navigator.clipboard.writeText(textLayout).then(() => {
+              setSuccessMsg(`Copied data card for ${record.name} to clipboard! Redirecting...`);
+              const cleanText = encodeURIComponent(`📋 Patient Case Summary Vector: ${record.id}\n\n` + textLayout);
+              window.open(`https://api.whatsapp.com/send?text=${cleanText}`, '_blank');
+            }).catch(err => {
+              const cleanText = encodeURIComponent(textLayout);
+              window.open(`https://api.whatsapp.com/send?text=${cleanText}`, '_blank');
+            });
+          };
+
+          // --- GLOBAL RESET TERMINAL ACTION ---
+          const deleteAllRecords = async () => {
+            if (!confirm("⚠️ WARNING: You are about to wipe out ALL records permanently from the remote Supabase database. Do you want to proceed?")) return;
+            if (!confirm("Please re-confirm: Are you absolutely certain you want to clear the master cloud database?")) return;
+            if (!supabase) return;
+
+            try {
+              const { error: sbErr } = await supabase
+                .from('records')
+                .delete()
+                .neq('id', 'void_call_assertion'); 
+
+              if (sbErr) throw sbErr;
+              
+              setSelectedRowIds([]);
+              setPrintItems([]);
+              cancelEditMode();
+              setSuccessMsg("All workspace ledger cloud table rows safely wiped clean.");
+              fetchSupabaseRecords();
+            } catch(err) {
+              setError(`Bulk Delete Error: ${err.message}`);
+            }
+          };
+
+          // --- FUZZY HEURISTIC RESOLVER FOR ARBITRARY SCHEMAS ---
+          const findValueByFuzzyKeys = (rowObject, keysArray, isNameField = false) => {
+            const targetKey = Object.keys(rowObject).find(rowKey => {
+              const normalizedRowKey = rowKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (isNameField && (normalizedRowKey.includes('id') || normalizedRowKey.includes('ref'))) {
+                return false;
+              }
+              return keysArray.some(k => normalizedRowKey.includes(k));
+            });
+            return targetKey ? rowObject[targetKey] : undefined;
+          };
+
+          // --- STRICT DISCOVERY AND EXTRACTION PARSER ---
+          const handleUniversalFileImport = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            setError(''); setSuccessMsg('');
+            const fileExtension = file.name.split('.').pop().toLowerCase();
+
+            if (['xlsx', 'xls', 'csv'].includes(fileExtension)) {
+              const reader = new FileReader();
+              reader.onload = (evt) => {
+                try {
+                  const bstr = evt.target.result;
+                  const workbook = XLSX.read(bstr, { type: 'binary', cellDates: true });
+                  const sheetName = workbook.SheetNames[0];
+                  const worksheet = workbook.Sheets[sheetName];
+                  const rawJson = XLSX.utils.sheet_to_json(worksheet);
+
+                  if (rawJson.length === 0) throw new Error("Parsed target worksheet payload contains empty matrix rows.");
+                  importParsedRows(rawJson);
+                } catch (err) {
+                  setError(`Spreadsheet parser validation fault: ${err.message}`);
+                }
+              };
+              reader.readAsBinaryString(file);
+            } else {
+              const reader = new FileReader();
+              reader.onload = (evt) => {
+                try {
+                  const rawText = evt.target.result;
+                  parsePlaintextContentStream(rawText);
+                } catch (err) {
+                  setError(`Structured content ingest parser pipeline error: ${err.message}`);
+                }
+              };
+              reader.readAsText(file);
+            }
+            e.target.value = ''; 
+          };
+
+          const importParsedRows = async (rawRowsArray) => {
+            const compiledInjections = [];
+
+            rawRowsArray.forEach((row) => {
+              const name = findValueByFuzzyKeys(row, ['name', 'patient', 'fullname', 'ptname'], true) || '';
+              if (!String(name).trim()) return; 
+
+              const labId = findValueByFuzzyKeys(row, ['labid', 'lab', 'referenceno', 'idno']) || '';
+              const fileDateRaw = findValueByFuzzyKeys(row, ['date', 'regdate', 'timestamp', 'createdat']);
+              let parsedRowDate = new Date();
+
+              if (fileDateRaw) {
+                const dateCandidate = new Date(fileDateRaw);
+                if (!isNaN(dateCandidate.getTime())) {
+                  parsedRowDate = dateCandidate;
+                }
+              }
+
+              const ageRaw = findValueByFuzzyKeys(row, ['age', 'years', 'yr']) || '';
+              const age = String(ageRaw).replace(/\D/g, '') || '30';
+
+              const genderValue = findValueByFuzzyKeys(row, ['gender', 'sex', 'gnd']) || 'Male';
+              let gender = 'Male';
+              if (String(genderValue).toLowerCase().startsWith('f')) gender = 'Female';
+              if (String(genderValue).toLowerCase().startsWith('o')) gender = 'Other';
+
+              const mobileRaw = findValueByFuzzyKeys(row, ['mobile', 'phone', 'contact', 'phno', 'mob']) || '';
+              let mobile = String(mobileRaw).replace(/\D/g);
+              if (mobile.length > 10) mobile = mobile.slice(-10);
+              if (mobile.length !== 10) mobile = '0000000000'; 
+
+              const aadhaarRaw = findValueByFuzzyKeys(row, ['aadhaar', 'adhar', 'uid', 'identity', 'adh']) || '';
+              let aadhaar = String(aadhaarRaw).replace(/\D/g);
+              if (aadhaar.length !== 12) aadhaar = '';
+
+              const address = findValueByFuzzyKeys(row, ['address', 'residence', 'village', 'add', 'loc']) || '';
+              const guardianName = findValueByFuzzyKeys(row, ['guardian', 'father', 'spouse', 'gdn']) || '';
+              const testField = findValueByFuzzyKeys(row, ['test', 'disease', 'positive', 'outcome', 'profile', 'finding']);
+
+              let tests = [];
+              if (testField) {
+                const parts = String(testField).split(/[,;|]/).map(t => t.trim().toLowerCase());
+                tests = testOptions.filter(opt => parts.some(p => p.includes(opt.toLowerCase()) || opt.toLowerCase().includes(p)));
+              }
+              
+              if (tests.length === 0) {
+                tests = [testOptions[0] || 'Malaria Pv/Pf'];
+              }
+
+              const cleanIsoDate = parsedRowDate.toISOString().split('T')[0];
+              const cleanDateParts = cleanIsoDate.split('-');
+              const calculatedDisplayDate = `${cleanDateParts[2]}/${cleanDateParts[1]}/${cleanDateParts[0]}`;
+
+              compiledInjections.push({
+                id: 'IMP-' + Math.floor(100000 + Math.random() * 900000),
+                labId: labId ? String(labId).trim() : '',
+                name: String(name).trim(),
+                guardianName: guardianName ? String(guardianName).trim() : '',
+                age: String(age),
+                gender,
+                mobile,
+                aadhaar,
+                address: address ? String(address).trim() : '',
+                tests,
+                rawDate: cleanIsoDate,
+                displayDate: calculatedDisplayDate,
+                monthGroup: parsedRowDate.toLocaleString('default', { month: 'long', year: 'numeric' })
+              });
+            });
+
+            if (compiledInjections.length === 0) {
+              setError("No usable rows found. Please ensure the file has a 'Name' column and matches entry constraints.");
+              return;
+            }
+
+            if (!supabase) return setError("Supabase configuration unverified.");
+            try {
+              const { error: sbErr } = await supabase.from('records').insert(compiledInjections);
+              if (sbErr) throw sbErr;
+              setSuccessMsg(`Extracted and processed ${compiledInjections.length} rows directly into Cloud Server Storage.`);
+              fetchSupabaseRecords();
+            } catch(err) {
+              setError(`Bulk Import Cloud Error: ${err.message}`);
+            }
+          };
+
+          const parsePlaintextContentStream = (text) => {
+            const lines = text.split('\n');
+            const placeholderRows = [];
+            
+            lines.forEach(line => {
+              const cleanLine = line.trim();
+              if (cleanLine.length < 5) return;
+
+              const segments = cleanLine.split(/,|\t|\|/);
+              if (segments.length >= 2 && segments[0]?.trim()) {
+                placeholderRows.push({
+                  'Patient Name': segments[0]?.trim(),
+                  'Age': segments[1]?.trim() || '',
+                  'Gender': segments[2]?.trim() || '',
+                  'Mobile': segments[3]?.trim() || '',
+                  'Aadhaar': segments[4]?.trim() || '',
+                  'Address': segments[5]?.trim() || '',
+                  'Test': segments[6]?.trim() || '',
+                  'Lab ID': segments[7]?.trim() || '',
+                  'Registration Date': segments[8]?.trim() || ''
+                });
+              }
+            });
+
+            if (placeholderRows.length === 0) throw new Error("No structured text scope patterns could be traced.");
+            importParsedRows(placeholderRows);
+          };
+
+          // --- MEMOIZED CALCULATION OF AVAILABLE UNIQUE MONTH GROUPS ---
+          const uniqueMonths = useMemo(() => {
+            const groups = records.map(r => r.monthGroup).filter(Boolean);
+            return Array.from(new Set(groups)).sort((a, b) => new Date(b) - new Date(a));
+          }, [records]);
+
+          // --- MEMOIZED MASTER FILTER RESOLUTION PIPELINE ---
+          const filteredRecords = useMemo(() => {
+            return records.filter(record => {
+              if (searchQuery.trim() !== '') {
+                const term = searchQuery.toLowerCase().trim();
+                return (
+                  String(record.id).toLowerCase().includes(term) ||
+                  (record.labId && String(record.labId).toLowerCase().includes(term)) ||
+                  String(record.name).toLowerCase().includes(term) ||
+                  (record.guardianName && String(record.guardianName).toLowerCase().includes(term)) ||
+                  String(record.age).includes(term) ||
+                  String(record.gender).toLowerCase().includes(term) ||
+                  String(record.mobile).includes(term) ||
+                  (record.aadhaar && String(record.aadhaar).includes(term)) ||
+                  (record.address && String(record.address).toLowerCase().includes(term)) ||
+                  String(record.displayDate).toLowerCase().includes(term) ||
+                  record.tests.some(t => String(t).toLowerCase().includes(term))
+                );
+              }
+
+              const matchesMonth = filterMonth === 'All' || record.monthGroup === filterMonth;
+              const matchesDate = !filterDate || record.rawDate === filterDate;
+              const matchesDiseaseCard = activeDiseaseFilter === 'All' || record.tests.includes(activeDiseaseFilter);
+
+              return matchesMonth && matchesDate && matchesDiseaseCard;
+            });
+          }, [records, searchQuery, filterMonth, filterDate, activeDiseaseFilter]);
+
+          // --- ANALYTICAL MATRIX FILTER RESOLVERS (Scoped by Date/Month rules) ---
+          const getCardCount = (diseaseName) => {
+            return records.filter(r => {
+              const matchesMonth = filterMonth === 'All' || r.monthGroup === filterMonth;
+              const matchesDate = !filterDate || r.rawDate === filterDate;
+              return matchesMonth && matchesDate && r.tests.includes(diseaseName);
+            }).length;
+          };
+
+          const getTotalFilteredCount = () => {
+            return records.filter(r => {
+              const matchesMonth = filterMonth === 'All' || r.monthGroup === filterMonth;
+              const matchesDate = !filterDate || r.rawDate === filterDate;
+              return matchesMonth && matchesDate;
+            }).length;
+          };
+
+          // --- ROW EXCLUSION SELECTION CONTROLS ---
+          const handleSelectRow = (id) => {
+            setSelectedRowIds(prev => prev.includes(id) ? prev.filter(rid => rid !== id) : [...prev, id]);
+          };
+
+          const handleSelectAllVisible = () => {
+            const visibleIds = filteredRecords.map(r => r.id);
+            if (visibleIds.every(id => selectedRowIds.includes(id))) {
+              setSelectedRowIds(prev => prev.filter(id => !visibleIds.includes(id)));
+            } else {
+              setSelectedRowIds(prev => Array.from(new Set([...prev, ...visibleIds])));
+            }
+          };
+
+          // --- EXPORTS SYSTEM ---
+          const downloadExcel = () => {
+            if (filteredRecords.length === 0) return alert("Empty context workspace logs state. Excel dispatch aborted.");
+            
+            const dataMap = filteredRecords.map(r => ({
+              'Lab ID': r.labId || 'N/A',
+              'Patient ID': r.id, 
+              'Registration Date': r.displayDate, 
+              'Patient Name': r.name,
+              'Guardian Name': r.guardianName || 'N/A', 
+              'Age': Number(r.age) || 0, 
+              'Gender': r.gender,
+              'Mobile': Number(r.mobile.replace(/\D/g, '')) || '', 
+              'Aadhaar': r.aadhaar ? Number(r.aadhaar.replace(/\D/g, '')) : '', 
+              'Address': r.address || 'N/A',
+              'Positive Profile Outcomes': r.tests.join(', ')
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(dataMap);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Registry Dashboard");
+            XLSX.writeFile(wb, `Clinical_Ledger_Export_${Date.now().toString().slice(-4)}.xlsx`);
+          };
+
+          // --- DOCUMENT PRINT WRITER ---
+          const handleExportToDocument = () => {
+            const selectedData = records.filter(r => selectedRowIds.includes(r.id));
+            if (selectedData.length === 0) {
+              alert("Please select at least one patient record checkbox in the log table below first.");
+              return;
+            }
+            
+            setPrintItems(selectedData);
+            setTimeout(() => {
+              window.print();
+            }, 100);
+          };
+
+          // --- UN-AUTHENTICATED SYSTEM GATING VIEWPORTS ---
+          if (!isAuthenticated) {
+            return (
+              <div class="min-h-screen flex items-center justify-center bg-slate-100 p-4 font-sans">
+                <div class="bg-white p-6 md:p-8 rounded-2xl shadow-xl border border-slate-200 w-full max-w-md space-y-6">
+                  <div class="text-center space-y-2">
+                    <div class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-teal-50 text-teal-700 font-bold text-2xl shadow-inner">
+                      🔒
+                    </div>
+                    <h2 class="text-xl font-black text-slate-800 uppercase tracking-wide">System Access Gate</h2>
+                    <p class="text-xs text-slate-400">Core Registry Terminal Deployment Module v4</p>
+                  </div>
+
+                  {authError && (
+                    <div class="p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-semibold text-center">
+                      ⚠️ {authError}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleLoginSubmit} class="space-y-4">
+                    <div>
+                      <label class="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Operational Login ID</label>
+                      <input 
+                        type="text" 
+                        required
+                        value={loginId} 
+                        onChange={(e) => setLoginId(e.target.value)}
+                        placeholder="Enter Operational User ID" 
+                        class="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-teal-600 transition"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Access Password</label>
+                      <input 
+                        type="password" 
+                        required
+                        value={password} 
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••" 
+                        class="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-teal-600 transition"
+                      />
+                    </div>
+                    <button type="submit" class="w-full bg-teal-700 hover:bg-teal-800 text-white font-bold py-3 rounded-xl transition shadow text-sm uppercase tracking-wide cursor-pointer">
+                      Initialize Session Terminal
+                    </button>
+                  </form>
+                  <div class="text-center text-[10px] text-slate-400 italic">
+                    Default Credentials Hint: admin / admin123
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // --- DISPATCH RENDERING PRINCIPAL MODULE PLATFORM ---
+          return (
+            <div class="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
+              <div class="max-w-7xl mx-auto space-y-6">
+
+                {/* Database Endpoint Verification Prompt Box */}
+                {(SUPABASE_URL === "YOUR_SUPABASE_PROJECT_URL") && (
+                  <div class="p-4 bg-amber-50 border border-amber-300 text-amber-900 text-xs rounded-xl font-medium no-print">
+                    ⚠️ <strong>Supabase Credentials Required:</strong> Open this file in your text editor and modify lines 43 and 44 with your specific Supabase Project Endpoint configurations to enable active database syncing protocols.
+                  </div>
+                )}
+                
+                {/* Hero Header Unit Layout */}
+                <header class="bg-teal-700 text-white p-5 rounded-xl shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
+                  <div>
+                    <h1 class="text-2xl font-bold">Clinical Patient Registry System</h1>
+                    <p class="text-teal-100 text-sm mt-0.5">Unified Core Intake, Document Pull, & Print Dispatch Terminal (Supabase Engine)</p>
+                  </div>
+                  <div class="flex flex-wrap gap-2 items-center">
+                    <button onClick={handleExportToDocument} class="bg-blue-600 hover:bg-blue-500 font-semibold text-white px-4 py-2.5 rounded-lg shadow transition text-sm cursor-pointer">
+                      📄 Export Selected ({selectedRowIds.length})
+                    </button>
+                    <button onClick={downloadExcel} class="bg-emerald-600 hover:bg-emerald-500 font-semibold text-white px-4 py-2.5 rounded-lg shadow transition text-sm cursor-pointer">
+                      📊 Export Grid ({filteredRecords.length})
+                    </button>
+                    <button onClick={deleteAllRecords} class="bg-red-600 hover:bg-red-500 font-semibold text-white px-4 py-2.5 rounded-lg shadow transition text-sm cursor-pointer">
+                      🗑️ Delete All Cloud Data
+                    </button>
+                    <button onClick={handleSystemLogout} class="bg-slate-900 hover:bg-slate-950 font-bold text-white px-3 py-2.5 rounded-lg shadow transition text-sm border border-slate-950 cursor-pointer" title="Exit Security Console Session">
+                      🔒 Logout
+                    </button>
+                  </div>
+                </header>
+
+                {/* Scope Selection / Filter Controls Dashboard Row */}
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap gap-4 items-center justify-between no-print">
+                  <div class="flex flex-wrap gap-4 items-center">
+                    <div class="text-sm font-semibold text-slate-700">Timeline Scope Filters:</div>
+                    <div class="flex items-center space-x-2">
+                      <label class="text-xs text-slate-500 font-medium">Month Selector:</label>
+                      <select value={filterMonth} onChange={(e) => { setFilterMonth(e.target.value); setFilterDate(''); setActiveDiseaseFilter('All'); }} class="bg-slate-50 border border-slate-300 rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-teal-600">
+                        <option value="All">All Logged Months</option>
+                        {uniqueMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                      <label class="text-xs text-slate-500 font-medium">Specific Date:</label>
+                      <input type="date" value={filterDate} onChange={(e) => { setFilterDate(e.target.value); setFilterMonth('All'); setActiveDiseaseFilter('All'); }} class="bg-slate-50 border border-slate-300 rounded-md px-3 py-1 text-sm outline-none focus:ring-2 focus:ring-teal-600" />
+                    </div>
+                  </div>
+
+                  {/* DATA IMPORTER DOCK STAGE */}
+                  <div class="flex items-center space-x-2 bg-slate-50 border border-dashed border-slate-300 p-1.5 px-3 rounded-lg">
+                    <span class="text-xs font-bold text-slate-600 uppercase" title="Filters file rows and automatically groups timeline metadata parameters.">📥 Pull Data File:</span>
+                    <input type="file" accept=".xlsx,.xls,.csv,.txt" onChange={handleUniversalFileImport} class="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer" />
+                  </div>
+                </div>
+
+                {/* System Process Status Banner lines */}
+                {error && <div class="p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-medium no-print">{error}</div>}
+                {successMsg && <div class="p-3 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-sm font-medium no-print">{successMsg}</div>}
+
+                {/* INTERACTIVE STATISTICAL COUNTBLOCKS CARDS GRID */}
+                <div class="no-print">
+                  <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">Click below to isolate exact matched pathology diagnostic rows</div>
+                  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
+                    
+                    {/* ALL PATIENT GLOBAL METRICS SUMMATION TILE */}
+                    <div onClick={() => setActiveDiseaseFilter('All')} class={`cursor-pointer p-4 rounded-xl transition border text-center relative group select-none ${activeDiseaseFilter === 'All' ? 'bg-slate-900 text-white border-slate-950 ring-2 ring-slate-950/20' : 'bg-white hover:bg-slate-50 border-slate-200'}`}>
+                      <div class={`text-xs font-bold uppercase tracking-wide ${activeDiseaseFilter === 'All' ? 'text-teal-400' : 'text-slate-500'}`}>All Patients</div>
+                      <div class="text-2xl font-black mt-1">{getTotalFilteredCount()}</div>
+                    </div>
+
+                    {testOptions.map((disease) => {
+                      const count = getCardCount(disease);
+                      const isSelected = activeDiseaseFilter === disease;
+                      return (
+                        <div key={disease} onClick={() => setActiveDiseaseFilter(isSelected ? 'All' : disease)} class={`cursor-pointer p-4 rounded-xl transition border text-center relative group select-none ${isSelected ? 'bg-teal-50 border-teal-500 ring-2 ring-teal-500/20' : 'bg-white hover:bg-slate-50 border-slate-200'}`}>
+                          <div class="text-xs font-semibold text-slate-500 truncate" title={disease}>{disease}</div>
+                          <div class={`text-2xl font-bold mt-1 ${count > 0 ? 'text-red-600' : 'text-slate-300'}`}>{count}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Workspace Split Alignment Column Frames layout */}
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 no-print">
+                  
+                  {/* LEFT SIDEBAR: FORMS AND CHECKLIST MANAGEMENT MODULE */}
+                  <div class="space-y-6 lg:col-span-1">
+                    
+                    {/* Primary Patient Intake Capture Form Section */}
+                    <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-fit">
+                      <div class="flex justify-between items-center mb-3 pb-1.5 border-b">
+                        <h2 class="text-md font-bold text-slate-800 uppercase tracking-wide">
+                          {editingRecordId ? '✏️ Edit Patient Entry' : 'Patient Intake Capture'}
+                        </h2>
+                        {editingRecordId && (
+                          <button type="button" onClick={cancelEditMode} class="text-xs text-red-500 font-semibold hover:underline cursor-pointer">
+                            Cancel Edit
+                          </button>
+                        )}
+                      </div>
+                      <form onSubmit={handleSubmit} class="space-y-3.5">
+                        <div class="grid grid-cols-2 gap-2">
+                          <div>
+                            <label class="block text-[11px] font-bold text-slate-500 uppercase">Registration Date</label>
+                            <input type="date" name="date" required value={formData.date} onChange={handleInputChange} class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50" />
+                          </div>
+                          <div>
+                            <label class="block text-[11px] font-bold text-slate-500 uppercase">Lab ID</label>
+                            <input type="text" name="labId" value={formData.labId} onChange={handleInputChange} placeholder="LAB-001" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                          </div>
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-500 uppercase">Patient Full Name</label>
+                          <input type="text" name="name" required value={formData.name} onChange={handleInputChange} placeholder="Full Name" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-500 uppercase">Guardian Name Reference</label>
+                          <input type="text" name="guardianName" value={formData.guardianName} onChange={handleInputChange} placeholder="Father's / Spouse's Name" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                          <div>
+                            <label class="block text-[11px] font-bold text-slate-500 uppercase">Age</label>
+                            <input type="number" name="age" required min="1" max="120" value={formData.age} onChange={handleInputChange} placeholder="Yrs" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                          </div>
+                          <div>
+                            <label class="block text-[11px] font-bold text-slate-500 uppercase">Gender</label>
+                            <select name="gender" value={formData.gender} onChange={handleInputChange} class="w-full px-3 py-1.5 border rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-teal-500">
+                              <option>Male</option><option>Female</option><option>Other</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-500 uppercase">Mobile Number (10 Digits)</label>
+                          <input type="text" name="mobile" required maxLength="10" value={formData.mobile} onChange={handleInputChange} placeholder="Contact Number" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-500 uppercase">Aadhaar National Identity Number <span class="text-slate-400 font-normal italic">(Optional)</span></label>
+                          <input type="text" name="aadhaar" maxLength="12" value={formData.aadhaar} onChange={handleInputChange} placeholder="Identity ID Reference (12 Digits)" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" />
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-500 uppercase">Residential Address Coordinates</label>
+                          <textarea name="address" rows="2" value={formData.address} onChange={handleInputChange} placeholder="Village, Block, Town address markers" class="w-full px-3 py-1.5 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500 resize-none"></textarea>
+                        </div>
+
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-600 uppercase mb-1">Assayed Findings Selection Checklist:</label>
+                          <div class="bg-slate-50 p-2.5 rounded-lg border grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto">
+                            {testOptions.map((test) => (
+                              <label key={test} class="flex items-center space-x-2.5 cursor-pointer p-0.5 hover:bg-white rounded text-xs text-slate-700">
+                                <input type="checkbox" checked={!!selectedTests[test]} onChange={() => handleCheckboxToggle(test)} class="h-3.5 w-3.5 rounded text-teal-600 border-slate-300 focus:ring-teal-500" />
+                                <span class="truncate">{test}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button type="submit" class={`w-full text-white font-medium py-2 rounded-lg text-sm cursor-pointer transition-colors ${editingRecordId ? 'bg-blue-600 hover:bg-blue-700' : 'bg-teal-600 hover:bg-teal-700'}`}>
+                          {editingRecordId ? 'Update Cloud Database Entry Row' : 'Commit Data to Supabase Cloud'}
+                        </button>
+                      </form>
+                    </section>
+
+                    {/* DYNAMIC CHECKLIST MANAGEMENT MODULE FRAME */}
+                    <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                      <h2 class="text-xs font-bold text-slate-700 mb-2.5 uppercase tracking-wider">Configure Checklist Options</h2>
+                      <div class="space-y-3">
+                        <div class="flex space-x-2">
+                          <input type="text" value={newTestInput} onChange={(e) => setNewTestInput(e.target.value)} placeholder="Add new test marker type" class="flex-1 px-2.5 py-1.5 border rounded-lg text-xs outline-none focus:ring-2 focus:ring-teal-500" />
+                          <button onClick={addNewTestOption} class="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer">
+                            + Add
+                          </button>
+                        </div>
+                        <div class="divide-y max-h-32 overflow-y-auto bg-slate-50 rounded-lg p-1.5 border">
+                          {testOptions.map(test => (
+                            <div key={test} class="flex justify-between items-center py-1.5 px-1 text-xs text-slate-600 group">
+                              <span class="truncate pr-2 font-medium">{test}</span>
+                              <button onClick={() => deleteTestOption(test)} class="text-red-400 hover:text-red-600 font-bold px-1.5 rounded text-xs cursor-pointer opacity-40 group-hover:opacity-100 transition" title="Delete Option">
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+
+                  </div>
+
+                  {/* RIGHT PANEL WORKSPACE: ACTIVE DATABASE DATA QUEUE VIEWPORT */}
+                  <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 lg:col-span-2 flex flex-col min-h-[450px]">
+                    
+                    {/* UNIVERSAL MASTER SEARCH FIELD ACTION COMPONENT */}
+                    <div class="mb-4 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400 font-medium text-xs">🔍</span>
+                        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search records instantly by Name, ID, Lab ID, Mobile, Aadhaar, Address, Diagnosis etc... (Searches all patient logs)" class="w-full pl-8 pr-4 py-2 border rounded-lg text-xs outline-none focus:ring-2 focus:ring-teal-500 bg-white shadow-inner" />
+                        {searchQuery && (
+                          <button onClick={() => setSearchQuery('')} class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer">
+                            ✕ Clear Lookup
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div class="mb-3 pb-2 border-b flex justify-between items-center flex-wrap gap-2">
+                      <h2 class="text-md font-bold text-slate-800 uppercase tracking-wide">
+                        Active Registry Log List
+                        {activeDiseaseFilter !== 'All' && <span class="ml-2 text-xs font-normal normal-case text-teal-600 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">Query Block Isolation: {activeDiseaseFilter}</span>}
+                        {searchQuery.trim() !== '' && <span class="ml-2 text-xs font-normal normal-case text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">Global Search Overrides Active Filters</span>}
+                      </h2>
+                      <span class="text-xs font-semibold text-slate-400">Total Display Matrix Count: {filteredRecords.length} Rows</span>
+                    </div>
+
+                    {filteredRecords.length === 0 ? (
+                      <div class="flex-1 flex flex-col items-center justify-center text-slate-400 py-12 text-sm italic">
+                        No active clinical diagnostic logs map against your current search query filters.
+                      </div>
+                    ) : (
+                      <div class="overflow-x-auto w-full">
+                        <table class="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr class="bg-slate-50 border-b text-slate-600 font-bold uppercase tracking-wider">
+                              <th class="p-2.5 w-8 text-center">
+                                <input type="checkbox" checked={filteredRecords.length > 0 && filteredRecords.every(r => selectedRowIds.includes(r.id))} onChange={handleSelectAllVisible} class="h-3.5 w-3.5 rounded text-teal-600 border-slate-300 cursor-pointer" />
+                              </th>
+                              <th class="p-2.5">ID / Registration Date</th>
+                              <th class="p-2.5">Patient Demographics</th>
+                              <th class="p-2.5">Identifiers & Core Address</th>
+                              <th class="p-2.5">Active Pathogen Profiles</th>
+                              <th class="p-2.5 text-center">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody class="divide-y divide-slate-100 text-slate-700">
+                            {filteredRecords.map((record) => {
+                              const isChecked = selectedRowIds.includes(record.id);
+                              const isBeingEdited = editingRecordId === record.id;
+                              return (
+                                <tr key={record.id} class={`transition-colors ${isBeingEdited ? 'bg-blue-50/70 animate-pulse' : isChecked ? 'bg-slate-50/90' : 'hover:bg-slate-50/40'}`}>
+                                  <td class="p-2.5 text-center">
+                                    <input type="checkbox" checked={isChecked} onChange={() => handleSelectRow(record.id)} class="h-3.5 w-3.5 rounded text-teal-600 border-slate-300 cursor-pointer" />
+                                  </td>
+                                  <td class="p-2.5">
+                                    <span class="font-mono font-bold text-teal-700 block">{record.id}</span>
+                                    {record.labId && <span class="bg-slate-100 text-slate-700 text-[10px] px-1 font-semibold rounded inline-block mt-0.5">Lab: {record.labId}</span>}
+                                    <span class="text-[10px] text-slate-400 block mt-0.5">{record.displayDate}</span>
+                                  </td>
+                                  <td class="p-2.5">
+                                    <div class="font-bold text-slate-900">{record.name}</div>
+                                    <div class="text-slate-500 font-medium">{record.age} Yrs • {record.gender}</div>
+                                    <div class="text-[10px] text-slate-400 italic">Guardian: {record.guardianName || '—'}</div>
+                                  </td>
+                                  <td class="p-2.5 space-y-0.5 max-w-[170px]">
+                                    <div class="font-mono"><span class="text-slate-400">Mob:</span> {record.mobile}</div>
+                                    <div class="font-mono"><span class="text-slate-400">Aadh:</span> {record.aadhaar || '—'}</div>
+                                    <div class="text-slate-500 truncate" title={record.address}><span class="text-slate-400 font-bold">Add:</span> {record.address || '—'}</div>
+                                  </td>
+                                  <td class="p-2.5">
+                                    <div class="flex flex-wrap gap-1">
+                                      {record.tests.map((t, idx) => (
+                                        <span key={idx} class={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${t === activeDiseaseFilter ? 'bg-teal-600 text-white border-teal-700' : 'bg-red-50 text-red-700 border-red-100'}`}>
+                                          {t}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td class="p-2.5 text-center whitespace-nowrap">
+                                    <div class="flex flex-col items-center justify-center space-y-1">
+                                      <div class="flex items-center space-x-2">
+                                        <button onClick={() => startEditRecord(record)} class="text-blue-600 hover:text-blue-800 font-medium cursor-pointer text-xs" title="Edit patient profile">
+                                          Edit
+                                        </button>
+                                        <span class="text-slate-300">|</span>
+                                        <button onClick={() => deleteRecord(record.id)} class="text-red-500 hover:text-red-700 font-medium cursor-pointer text-xs" title="Delete record node">
+                                          Delete
+                                        </button>
+                                      </div>
+                                      <button onClick={() => shareAsDataCard(record)} class="text-emerald-700 hover:text-emerald-900 font-bold cursor-pointer text-[10px] bg-emerald-50 px-2 py-1 rounded border border-emerald-200 block w-full text-center hover:bg-emerald-100 transition shadow-xs" title="Copy Card data profile and dispatch straight to WhatsApp">
+                                        📲 Share Card
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+
+                </div>
+
+                {/* --- ISOLATED DOCUMENT PRINT COMPILER ELEMENT TREE --- */}
+                {printItems.length > 0 && (
+                  <div id="print-document-structure" class="hidden print:block">
+                    <div style={{ borderBottom: '3px solid #0f766e', paddingBottom: '12px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                      <div>
+                        <h1 style={{ fontSize: '22px', color: '#115e59', textTransform: 'uppercase', margin: '0', fontWeight: 'bold' }}>Patient Case Registry Abstract</h1>
+                        <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0 0' }}>Official Reference Document Manifest Summary</p>
+                      </div>
+                      <div style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
+                        <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
+                        <div>Total Extracted Records: {printItems.length} Case(s)</div>
+                      </div>
+                    </div>
+                    
+                    <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#0f766e', color: '#ffffff', fontWeight: 'bold' }}>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Case ID / Lab ID / Date</th>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Patient & Guardian</th>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Mobile</th>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Aadhaar</th>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Residential Address</th>
+                          <th style={{ border: '1px solid #cbd5e1', padding: '8px' }}>Confirmed Positive Finds</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {printItems.map(item => (
+                          <tr key={item.id} style={{ backgroundColor: '#ffffff' }}>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px', fontFamily: 'monospace', fontWeight: 'bold', color: '#0f766e' }}>
+                              {item.id}
+                              {item.labId && <div style={{ fontSize: '10px', color: '#334155', fontWeight: 'bold', backgroundColor: '#f1f5f9', padding: '2px', marginTop: '3px', borderRadius: '3px' }}>Lab ID: {item.labId}</div>}
+                              <br /><span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 'normal' }}>{item.displayDate}</span>
+                            </td>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px' }}>
+                              <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{item.name}</div>
+                              <div style={{ color: '#64748b' }}>{item.age} Yrs / {item.gender}</div>
+                              <div style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic' }}>Gdn: {item.guardianName || 'N/A'}</div>
+                            </td>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px', fontFamily: 'monospace' }}>
+                              {item.mobile}
+                            </td>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px', fontFamily: 'monospace' }}>
+                              {item.aadhaar || '—'}
+                            </td>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px', color: '#334155', maxWidth: '180px', wordBreak: 'break-word' }}>
+                              {item.address || 'N/A'}
+                            </td>
+                            <td style={{ border: '1px solid #e2e8f0', padding: '8px' }}>
+                              {item.tests.map((t, i) => (
+                                <span key={i} style={{ display: 'inline-block', backgroundColor: '#fef2f2', color: '#b91c1c', border: '1px solid #fee2e2', borderRadius: '3px', padding: '2px 5px', fontSize: '9px', fontWeight: 'bold', margin: '2px' }}>
+                                  {t}
+                                </span>
+                              ))}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <div style={{ marginTop: '60px', paddingTop: '15px', borderTop: '1px solid #e2e8f0', display: 'flex', justifycontent: 'space-between', fontSize: '10px', color: '#94a3b8' }}>
+                      <div>Terminal Protocol: Supabase-System-V4</div>
+                      <div style={{ textAlign: 'center', borderTop: '1px solid #475569', width: '200px', paddingTop: '5px', color: '#475569', fontWeight: 'bold' }}>Authorized Signature</div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PatientRegistry />);
+    </script>
+</body>
+</html>
